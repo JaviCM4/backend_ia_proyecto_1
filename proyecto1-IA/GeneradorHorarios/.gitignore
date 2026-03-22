@@ -1,0 +1,6 @@
+.env
+.env.javier
+.env.luis
+/dist
+/node_modules
+/src/luis

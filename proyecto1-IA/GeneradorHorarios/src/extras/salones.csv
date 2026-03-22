@@ -1,0 +1,22 @@
+tipo_salon,nombre,capacidad,solo_tarde,habilitado_teorico
+NORMAL,"1",90,false,true
+NORMAL,"3",57,false,true
+NORMAL,"5",51,false,true
+NORMAL,"6",97,false,true
+NORMAL,"7",67,false,true
+NORMAL,"8",65,false,true
+NORMAL,"9",64,false,true
+NORMAL,"10",58,false,true
+NORMAL,"11",97,false,true
+NORMAL,"12",56,false,true
+NORMAL,"13",93,false,true
+LABORATORIO,"Laboratorio de Física",97,false,false
+SALON,"Salón de Proyecciones",84,false,true
+SALON,"Salón TICS",55,false,true
+LABORATORIO,"Laboratorio de Ingeniería Eléctrica",87,false,true
+LABORATORIO,"Laboratorio de Ingeniería Industrial",77,true,false
+SALON,"Salón Hugo Pineda",52,false,true
+SALON,"Salón Mayor",51,false,true
+SALON,"Salón de Dibujo",55,false,true
+CANCHA,"Cancha Deportiva",88,false,false
+LABORATORIO,"Laboratorio de Aguas",95,false,true
