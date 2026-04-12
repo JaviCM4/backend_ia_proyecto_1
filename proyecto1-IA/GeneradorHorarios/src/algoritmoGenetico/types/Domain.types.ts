@@ -101,6 +101,7 @@ export interface ConfiguracionHorario {
   horaInicioTarde: string;          // "13:40" o "14:30"
   horaFinTarde: string;             // "21:10" o "22:00"
   diasActivos: DiaSemana[];
+  semestrePar: boolean;
 }
 
 

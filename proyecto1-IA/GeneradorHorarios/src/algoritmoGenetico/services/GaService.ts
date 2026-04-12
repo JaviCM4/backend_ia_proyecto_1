@@ -25,6 +25,7 @@ export const CONFIG_HORARIO_DEFAULT: ConfiguracionHorario = {
   horaInicioTarde: "13:40",
   horaFinTarde: "21:10",
   diasActivos: ["lunes", "martes", "miercoles", "jueves", "viernes"],
+  semestrePar: false,
 };
 
 export const CONFIG_GA_DEFAULT: ConfiguracionGA = {

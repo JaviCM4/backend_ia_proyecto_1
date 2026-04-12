@@ -131,6 +131,7 @@ async function cargarCursos(
   periodos: InstanceType<typeof Periodo>[],
   asignacionesHorario: InstanceType<typeof AsignacionHorario>[],
   asignacionesSalon: InstanceType<typeof AsignacionSalon>[],
+  config: ConfiguracionHorario,
 ): Promise<CursoGA[]> {
 
   // Traemos cursos con carrera + secciones + laboratorios de una sola query
@@ -147,7 +148,16 @@ async function cargarCursos(
         include: [{ model: Laboratorio, as: 'laboratorios' }],
       },
     ],
-    where: { id: idsCursosConAsignacion.map((a) => a.curso_id) },
+     where: {
+      id: idsCursosConAsignacion.map((a) => a.curso_id),
+      [Op.and]: [
+        sequelize.where(
+          sequelize.literal(`MOD(semestre, 2)`),
+          config.semestrePar ? '=' : '!=',
+          0
+        )
+      ]
+    },
     order: [['semestre', 'ASC'], ['nombre', 'ASC']],
   });
 
@@ -264,6 +274,7 @@ export async function cargarContexto(
     periodosRows,
     asignacionesHorario,
     asignacionesSalon,
+    config,
   );
 
   // ── Resolver relaciones Docente ↔ Curso ──────────────────
@@ -356,6 +367,7 @@ export async function cargarContexto(
 import sequelize from '../../database/connection';
 import { DiaEnum, TipoAsignacionEnum, TipoSalonEnum } from '../../types/enums';
 import { DIAS_POR_ENUM } from './diasEnum';
+import { Op } from 'sequelize';
 
 // ─────────────────────────────────────────────────────────────
 // HELPERS DE MAPEO ENUM
