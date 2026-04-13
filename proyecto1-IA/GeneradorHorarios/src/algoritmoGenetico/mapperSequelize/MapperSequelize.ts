@@ -420,12 +420,10 @@ export async function guardarSolucion(
 
     // ── 0. Limpiar resultados anteriores ────────────────────
     // Una sola sentencia con CASCADE para que PostgreSQL no falle por FK
-    /*
     await sequelize.query(
       'TRUNCATE "calendario", "solucion", "periodo" RESTART IDENTITY CASCADE',
       { transaction: t },
     );
-    */
 
     // ── 1. Crear registro en solucion ────────────────────────
     const solucion = await Solucion.create(
