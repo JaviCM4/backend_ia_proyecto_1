@@ -30,7 +30,7 @@ export const CONFIG_HORARIO_DEFAULT: ConfiguracionHorario = {
 export const CONFIG_GA_DEFAULT: ConfiguracionGA = {
   tamanioPoblacion: 100,
   maxGeneraciones: 500,
-  fitnesObjetivo: 9800,      // ~98% del score máximo → horario casi perfecto
+  fitnesObjetivo: 98_000,    // ~98% del score máximo (BASE_SCORE = 100_000)
   tasaMutacion: 0.05,
   tasaCruce: 0.8,
   tamanioTorneo: 3,
@@ -90,6 +90,13 @@ export async function ejecutarHorarioGA(
   const configGA: ConfiguracionGA = {
     ...CONFIG_GA_DEFAULT,
     ...opciones.configGA,
+    // Si el cliente envía un fitnesObjetivo en escala antigua (≤ 10 000),
+    // ignorarlo y usar el default del backend para evitar parada prematura.
+    fitnesObjetivo:
+      opciones.configGA?.fitnesObjetivo !== undefined &&
+      opciones.configGA.fitnesObjetivo > 10_000
+        ? opciones.configGA.fitnesObjetivo
+        : CONFIG_GA_DEFAULT.fitnesObjetivo,
   };
 
   // ── 1. Contexto desde BD ───────────────────────────────────
@@ -108,36 +115,6 @@ export async function ejecutarHorarioGA(
   if (ctx.salones.length === 0) {
     throw new Error('No hay salones activos en la base de datos.');
   }
-
-  // ── DEBUG FITNESS ──────────────────────────────────────────
-  // Log temporal para diagnosticar fitness=0. Eliminar luego.
-  {
-    const { generarCromosoma } = await import('../genetic/Population');
-    const { evaluarFitness }   = await import('../genetic/Fitness');
-    const { detectarConflictos } = await import('../utils/validators');
-    const cromo = generarCromosoma(ctx);
-    evaluarFitness(cromo, ctx);
-    const conflictos = detectarConflictos(cromo.genes, ctx);
-    const porTipo = conflictos.reduce((acc, c) => {
-      acc[c.tipo] = (acc[c.tipo] ?? 0) + 1; return acc;
-    }, {} as Record<string, number>);
-    const penalizacion = conflictos.reduce((acc, c) => {
-      const pesos: Record<string, number> = {
-        docente_doble: 100, salon_doble: 100, semestre_traslape: 80,
-        docente_fuera_horario: 60, salon_jornada: 50, curso_jornada: 50,
-      };
-      return acc + (pesos[c.tipo] ?? 10);
-    }, 0);
-    console.log('\n====== FITNESS DEBUG ======');
-    console.log(`  Ctx: ${ctx.cursos.length} cursos | ${ctx.docentes.length} docentes | ${ctx.salones.length} salones | ${ctx.franjas.length} franjas`);
-    console.log(`  Genes del crom: ${cromo.genes.length}`);
-    console.log(`  Conflictos por tipo:`, porTipo);
-    console.log(`  Penalizacion total: ${penalizacion}`);
-    console.log(`  Fitness resultado: ${cromo.fitness}`);
-    console.log(`  Docentes horaEntrada sample:`, ctx.docentes.slice(0, 3).map(d => `${d.nombre}: ${d.horaEntrada}-${d.horaSalida}`));
-    console.log('===========================\n');
-  }
-  // ── FIN DEBUG ──────────────────────────────────────────────
 
   // ── 2. Ejecutar GA ─────────────────────────────────────────
   console.time('[gaService] GA');

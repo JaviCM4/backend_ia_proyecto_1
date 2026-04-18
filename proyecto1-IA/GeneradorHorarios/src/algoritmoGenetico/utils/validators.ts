@@ -20,12 +20,15 @@ function claveDiaPersistencia(
 
 export interface Conflicto {
   tipo:
-    | "docente_doble"        // docente en dos cursos a la vez
-    | "salon_doble"          // salón ocupado dos veces a la misma hora
-    | "semestre_traslape"    // mismo semestre/carrera a la misma hora (obligatorio)
-    | "docente_fuera_horario"// docente asignado fuera de su horario contratado
-    | "salon_jornada"        // salón usado en jornada no permitida
-    | "curso_jornada";       // curso asignado en jornada no permitida
+    | "docente_doble"            // docente en dos cursos a la vez
+    | "salon_doble"              // salón ocupado dos veces a la misma hora
+    | "semestre_traslape"        // mismo semestre/carrera a la misma hora (obligatorio)
+    | "docente_fuera_horario"    // docente asignado fuera de su horario contratado
+    | "salon_jornada"            // salón usado en jornada no permitida
+    | "curso_jornada"            // curso asignado en jornada no permitida
+    | "docente_no_asignado"      // docente no tiene asignación para ese curso
+    | "salon_incorrecto"         // salón distinto al fijo definido para el curso
+    | "lab_periodos_no_contiguos"; // períodos de lab no son contiguos ni en días M/J correctos
   descripcion: string;
   genesInvolucrados: [number, number] | [number]; // índices en el cromosoma
 }
@@ -51,6 +54,9 @@ export function detectarConflictos(
   for (let i = 0; i < genes.length; i++) {
     const gen = genes[i];
     if (!ctx.indiceFranjas.has(gen.franjaId)) continue;
+
+    // Obtener el curso UNA vez por gen (disponible en todo el bloque)
+    const curso = ctx.indiceCursos.get(gen.cursoId);
 
     // Todas las franjas que ocupa este gen (incluye laboratorios multi-periodo)
     const franjaIds = [gen.franjaId, ...(gen.franjasExtra ?? [])];
@@ -125,7 +131,6 @@ export function detectarConflictos(
       }
 
       // ── 3. Conflicto: mismo semestre/carrera (obligatorios) ────────
-      const curso = ctx.indiceCursos.get(gen.cursoId);
       if (curso && curso.tipo === "obligatorio") {
         const claveSemestre = `${curso.carrera}|${curso.semestre}|${bloquePersistido}`;
         if (ocupacionSemestre.has(claveSemestre)) {
@@ -152,6 +157,109 @@ export function detectarConflictos(
           descripcion: `Curso ${curso.nombre} asignado en jornada ${f.jornada} pero solo permite ${curso.jornada}`,
           genesInvolucrados: [i],
         });
+      }
+    } // fin for franjaIds
+
+    // ── 5. Docente no habilitado para el curso ──────────────────────
+    // (evaluado 1 vez por gen, no por franja)
+    if (gen.docenteId && curso) {
+      const docentesHabilitados = ctx.mapaCursoDocentes.get(gen.cursoId) ?? [];
+      if (docentesHabilitados.length > 0 && !docentesHabilitados.includes(gen.docenteId)) {
+        const docente = ctx.indiceDocentes.get(gen.docenteId);
+        conflictos.push({
+          tipo: "docente_no_asignado",
+          descripcion: `Docente ${docente?.nombre ?? gen.docenteId} no tiene asignación para el curso ${curso.nombre}`,
+          genesInvolucrados: [i],
+        });
+      }
+    }
+
+    // ── 6. Salón incorrecto (curso tiene salón fijo) ────────────────
+    if (gen.salonId && curso?.salonFijo && gen.salonId !== curso.salonFijo) {
+      const salon = ctx.indiceSalones.get(gen.salonId);
+      const salonFijo = ctx.indiceSalones.get(curso.salonFijo);
+      conflictos.push({
+        tipo: "salon_incorrecto",
+        descripcion: `Curso ${curso.nombre} debe estar en salón ${salonFijo?.nombre ?? curso.salonFijo} pero está en ${salon?.nombre ?? gen.salonId}`,
+        genesInvolucrados: [i],
+      });
+    }
+  } // fin for genes
+
+  // ── 7. Períodos de lab no contiguos ──────────────────────────────
+  // Agrupa genes de lab por (cursoId|seccion) y verifica que los
+  // noPeriodosLab períodos queden juntos (mismo día M o J).
+  {
+    const labPorSeccion = new Map<string, { gens: Gen[]; idxs: number[] }>();
+    for (let i = 0; i < genes.length; i++) {
+      const gen = genes[i];
+      if (gen.tipoSesion !== 'laboratorio') continue;
+      const k = `${gen.cursoId}|${gen.seccion}`;
+      let entry = labPorSeccion.get(k);
+      if (!entry) { entry = { gens: [], idxs: [] }; labPorSeccion.set(k, entry); }
+      entry.gens.push(gen); entry.idxs.push(i);
+    }
+    for (const [, { gens: labGens, idxs }] of labPorSeccion) {
+      if (labGens.length <= 1) continue;
+      const curso = ctx.indiceCursos.get(labGens[0].cursoId);
+      if (!curso) continue;
+      const esperados = curso.noPeriodosLab ?? 2;
+      if (labGens.length !== esperados) continue; // conteo ya se verifica en repararCromosoma
+
+      const franjas = labGens
+        .map(g => ctx.indiceFranjas.get(g.franjaId))
+        .filter(Boolean) as import('../types/Domain.types').FranjaHoraria[];
+      const dias = new Set(franjas.map(f => f.dia));
+
+      // Conflicto si mezcla días que no son M/J
+      const diasInvalidos = [...dias].filter(d => d !== 'martes' && d !== 'jueves');
+      if (diasInvalidos.length > 0) {
+        conflictos.push({
+          tipo: 'lab_periodos_no_contiguos',
+          descripcion: `Lab ${curso.nombre} sección ${labGens[0].seccion} tiene períodos en día incorrecto: ${diasInvalidos.join(', ')}`,
+          genesInvolucrados: [idxs[0]],
+        });
+        continue;
+      }
+
+      // Si todos en mismo día, verificar que sean contiguos
+      if (dias.size === 1) {
+        const ordenadas = franjas.slice().sort((a, b) =>
+          a.horaInicio.localeCompare(b.horaInicio));
+        let contiguos = true;
+        for (let i = 0; i < ordenadas.length - 1; i++) {
+          if (ordenadas[i].horaFin !== ordenadas[i + 1].horaInicio) {
+            contiguos = false; break;
+          }
+        }
+        if (!contiguos) {
+          conflictos.push({
+            tipo: 'lab_periodos_no_contiguos',
+            descripcion: `Lab ${curso.nombre} sección ${labGens[0].seccion} tiene ${esperados} períodos en el mismo día pero no son contiguos`,
+            genesInvolucrados: [idxs[0]],
+          });
+        }
+      }
+      // Si está en 2 días (M+J) con nPer=3: validar que al menos un día tiene 2 contiguos
+      else if (dias.size === 2 && esperados === 3) {
+        const porDia = new Map<string, typeof franjas>();
+        for (const f of franjas) {
+          let arr = porDia.get(f.dia); if (!arr) { arr = []; porDia.set(f.dia, arr); } arr.push(f);
+        }
+        let tieneContiguo = false;
+        for (const [, fsDia] of porDia) {
+          if (fsDia.length >= 2) {
+            const ord = fsDia.slice().sort((a, b) => a.horaInicio.localeCompare(b.horaInicio));
+            if (ord[0].horaFin === ord[1].horaInicio) { tieneContiguo = true; break; }
+          }
+        }
+        if (!tieneContiguo) {
+          conflictos.push({
+            tipo: 'lab_periodos_no_contiguos',
+            descripcion: `Lab ${curso.nombre} sección ${labGens[0].seccion} split M/J pero ningún par es contiguo`,
+            genesInvolucrados: [idxs[0]],
+          });
+        }
       }
     }
   }

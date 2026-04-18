@@ -293,83 +293,115 @@ export function generarCromosoma(ctx: ContextoGA): Cromosoma {
   }
 
   /**
-   * Genera SIEMPRE EXACTAMENTE 1 gen de lab por sección con las
-   * franjasExtra correctas para cubrir noPeriodosLab períodos.
+   * Genera exactamente noPeriodosLab genes de lab por sección.
+   * Cada período del laboratorio es un gen independiente con su
+   * propia franjaId (sin franjasExtra — ya no se usa).
    *
-   * Estrategia por caso:
-   *   1 período → gen simple
-   *   2 períodos → intenta 2 contiguos mismo día; si no, toma 1M + 1J
-   *   3 períodos → intenta 3 juntos (+5 bonus en fitness);
-   *                si no, toma 2M+1J o 1M+2J (split — permitido)
+   * Estrategia:
+   *   1 período → 1 gen en M o J
+   *   2 períodos → 2 contiguos mismo día; si no, 1M + 1J split
+   *   3 períodos → 3 contiguos mismo día (+5 bonus en fitness);
+   *                si no, 2+1 split entre M y J
    */
   function elegirGenLab(
     curso: Curso,
     docenteId: string | null,
     seccion: string,
-  ): Gen | null {
+  ): Gen[] {
     const nPer = curso.noPeriodosLab ?? 2;
     const sinSalon = curso.sinSalon ?? false;
 
-    const mkGen = (franjaId: string, salonId: string | null, franjasExtra?: string[]): Gen => ({
+    const mkGen = (franjaId: string, salonId: string | null): Gen => ({
       cursoId: curso.id, seccion, docenteId,
       salonId: sinSalon ? null : salonId,
       franjaId, tipoSesion: "laboratorio" as const,
-      ...(franjasExtra && franjasExtra.length > 0 ? { franjasExtra } : {}),
     });
+
+    const franjasLabFallback = (): string => {
+      let f = franjasDisponiblesParaCurso(curso, ctx.franjas, "laboratorio");
+      f = filtrarFranjasPorDocente(f, docenteId);
+      return f[0]?.id ?? ctx.franjas.find(fr => fr.dia === "martes")?.id ?? ctx.franjas[0]?.id ?? "";
+    };
+
+    const salonLabFallback = (): string | null => {
+      let s = salonesDisponiblesParaCurso(curso, "laboratorio", ctx.salones);
+      s = filtrarSalonesPorDocente(s, docenteId);
+      return s[0]?.id ?? null;
+    };
+
+    const genLabs: Gen[] = [];
 
     // ── 1 período ─────────────────────────────────────────────
     if (nPer <= 1) {
       const s = elegirFranjaSalonLibre(curso, "laboratorio", docenteId);
-      return s ? mkGen(s.franjaId, s.salonId) : null;
+      genLabs.push(s ? mkGen(s.franjaId, s.salonId) : mkGen(franjasLabFallback(), salonLabFallback()));
+      return genLabs;
     }
 
     // ── 2 períodos ────────────────────────────────────────────
     if (nPer === 2) {
       const s2 = elegirSlotLabContiguo(curso, 2, undefined, docenteId);
-      if (s2) return mkGen(s2.franjaId, s2.salonId, s2.franjasExtra);
-      const [diaA, diaB]: ["martes"|"jueves","martes"|"jueves"] =
-        Math.random() < 0.5 ? ["martes","jueves"] : ["jueves","martes"];
-      const sA = elegirSimpleEnDia(curso, diaA, docenteId);
-      const sB = elegirSimpleEnDia(curso, diaB, docenteId);
-      if (sA && sB) return mkGen(sA.franjaId, sA.salonId, [sB.franjaId]);
-      const s = sA ?? sB;
-      return s ? mkGen(s.franjaId, s.salonId) : null;
+      if (s2) {
+        genLabs.push(mkGen(s2.franjaId, s2.salonId));
+        genLabs.push(mkGen(s2.franjasExtra[0] ?? franjasLabFallback(), s2.salonId));
+      } else {
+        const [diaA, diaB]: ["martes"|"jueves","martes"|"jueves"] =
+          Math.random() < 0.5 ? ["martes","jueves"] : ["jueves","martes"];
+        const sA = elegirSimpleEnDia(curso, diaA, docenteId);
+        const sB = elegirSimpleEnDia(curso, diaB, docenteId);
+        const fbF = franjasLabFallback(); const fbS = salonLabFallback();
+        genLabs.push(sA ? mkGen(sA.franjaId, sA.salonId) : mkGen(fbF, fbS));
+        genLabs.push(sB ? mkGen(sB.franjaId, sB.salonId) : mkGen(fbF, fbS));
+      }
+      return genLabs;
     }
 
     // ── 3 períodos ────────────────────────────────────────────
     if (nPer === 3) {
       const s3 = elegirSlotLabContiguo(curso, 3, undefined, docenteId);
-      if (s3 && s3.franjasExtra.length === 2) {
-        return mkGen(s3.franjaId, s3.salonId, s3.franjasExtra);
+      if (s3 && s3.franjasExtra.length >= 2) {
+        genLabs.push(mkGen(s3.franjaId, s3.salonId));
+        genLabs.push(mkGen(s3.franjasExtra[0], s3.salonId));
+        genLabs.push(mkGen(s3.franjasExtra[1], s3.salonId));
+      } else {
+        const [diaA, diaB]: ["martes"|"jueves","martes"|"jueves"] =
+          Math.random() < 0.5 ? ["martes","jueves"] : ["jueves","martes"];
+        const slot2A = elegirSlotLabContiguo(curso, 2, diaA, docenteId);
+        if (slot2A) {
+          genLabs.push(mkGen(slot2A.franjaId, slot2A.salonId));
+          genLabs.push(mkGen(slot2A.franjasExtra[0] ?? franjasLabFallback(), slot2A.salonId));
+          const slot1B = elegirSimpleEnDia(curso, diaB, docenteId);
+          genLabs.push(slot1B ? mkGen(slot1B.franjaId, slot1B.salonId) : mkGen(franjasLabFallback(), salonLabFallback()));
+        } else {
+          const slot2B = elegirSlotLabContiguo(curso, 2, diaB, docenteId);
+          if (slot2B) {
+            const slot1A = elegirSimpleEnDia(curso, diaA, docenteId);
+            genLabs.push(slot1A ? mkGen(slot1A.franjaId, slot1A.salonId) : mkGen(franjasLabFallback(), salonLabFallback()));
+            genLabs.push(mkGen(slot2B.franjaId, slot2B.salonId));
+            genLabs.push(mkGen(slot2B.franjasExtra[0] ?? franjasLabFallback(), slot2B.salonId));
+          } else {
+            const fbF = franjasLabFallback(); const fbS = salonLabFallback();
+            const sA = elegirSimpleEnDia(curso, diaA, docenteId);
+            const sB = elegirSimpleEnDia(curso, diaB, docenteId);
+            const sC = elegirSimpleEnDia(curso, Math.random() < 0.5 ? diaA : diaB, docenteId);
+            genLabs.push(sA ? mkGen(sA.franjaId, sA.salonId) : mkGen(fbF, fbS));
+            genLabs.push(sB ? mkGen(sB.franjaId, sB.salonId) : mkGen(fbF, fbS));
+            genLabs.push(sC ? mkGen(sC.franjaId, sC.salonId) : mkGen(fbF, fbS));
+          }
+        }
       }
-      const [diaA, diaB]: ["martes"|"jueves","martes"|"jueves"] =
-        Math.random() < 0.5 ? ["martes","jueves"] : ["jueves","martes"];
-      const slot2A = elegirSlotLabContiguo(curso, 2, diaA, docenteId);
-      if (slot2A) {
-        const slot1B = elegirSimpleEnDia(curso, diaB, docenteId);
-        if (slot1B) return mkGen(slot2A.franjaId, slot2A.salonId, [...slot2A.franjasExtra, slot1B.franjaId]);
-      }
-      const slot2B = elegirSlotLabContiguo(curso, 2, diaB, docenteId);
-      if (slot2B) {
-        const slot1A = elegirSimpleEnDia(curso, diaA, docenteId);
-        if (slot1A) return mkGen(slot2B.franjaId, slot2B.salonId, [...slot2B.franjasExtra, slot1A.franjaId]);
-      }
-      const sA = elegirSimpleEnDia(curso, diaA, docenteId);
-      const sB = elegirSimpleEnDia(curso, diaB, docenteId);
-      const sC = elegirSimpleEnDia(curso, Math.random() < 0.5 ? diaA : diaB, docenteId);
-      const anchors = [sA, sB, sC].filter(Boolean) as Array<{franjaId:string; salonId:string|null}>;
-      if (anchors.length > 0) {
-        return mkGen(anchors[0].franjaId, anchors[0].salonId,
-          anchors.slice(1).map(a => a.franjaId));
-      }
-      return null;
+      return genLabs;
     }
 
-    // ── > 3 períodos: intento contiguos, si no, simples ───────
+    // ── > 3 períodos: contiguos o simples ─────────────────────
     const sN = elegirSlotLabContiguo(curso, nPer, undefined, docenteId);
-    if (sN) return mkGen(sN.franjaId, sN.salonId, sN.franjasExtra);
-    const sSimple = elegirFranjaSalonLibre(curso, "laboratorio", docenteId);
-    return sSimple ? mkGen(sSimple.franjaId, sSimple.salonId) : null;
+    if (sN) {
+      genLabs.push(mkGen(sN.franjaId, sN.salonId));
+      for (const extraId of sN.franjasExtra) genLabs.push(mkGen(extraId, sN.salonId));
+    }
+    const fbF = franjasLabFallback(); const fbS = salonLabFallback();
+    while (genLabs.length < nPer) genLabs.push(mkGen(fbF, fbS));
+    return genLabs;
   }
 
   /**
@@ -413,13 +445,11 @@ export function generarCromosoma(ctx: ContextoGA): Cromosoma {
       // ── Docente: elegir UNA VEZ para toda la sección ───────
       let docenteId: string | null = null;
       if (!curso.sinSalon) {
-        if (curso.docenteFijo) {
-          docenteId = curso.docenteFijo;
-        } else {
-          const posibles = ctx.mapaCursoDocentes.get(curso.id) ?? [];
-          const activos = posibles.filter((id) => ctx.docentesActivos.has(id));
-          docenteId = activos.length > 0 ? elegirAleatorio(activos) : null;
-        }
+        // Población inicial completamente aleatoria: cualquier docente activo,
+        // incluyendo los de docenteFijo. El GA + repararCromosoma restaurarán
+        // los docentes correctos a través de las generaciones.
+        const activos = ctx.docentes.filter(d => d.activo);
+        docenteId = activos.length > 0 ? elegirAleatorio(activos).id : null;
       }
 
       // ── Genes de teoría: noPeriodos con el MISMO salón ────
@@ -453,26 +483,34 @@ export function generarCromosoma(ctx: ContextoGA): Cromosoma {
           if (!teoriaSalonId) teoriaSalonId = salonesShuf[0]?.id ?? null;
         }
 
-        // Crear noPeriodos genes con diferente franja pero mismo salón
+        // Crear noPeriodos genes con diferente franja pero mismo salón.
+        // IMPORTANTE: la estructura del cromosoma debe ser fija — siempre se crea
+        // el gen aunque no haya franja ideal; el GA corregirá el conflicto via mutación.
+        const franjasTeoriaEmergencia = franjasDisponiblesParaCurso(curso, ctx.franjas, "teoria");
+        const franjasTeoriaFallback = franjasTeoriaEmergencia[0]?.id
+          ?? ctx.franjas.find(f => f.dia === "lunes")?.id
+          ?? ctx.franjas[0]?.id
+          ?? "";
+
         for (let p = 0; p < noPeriodos; p++) {
-          const franjaId = teoriaSalonId
+          let franjaId = teoriaSalonId
             ? elegirFranjaLibreParaSalon(curso, "teoria", teoriaSalonId, docenteId)
-            : (filtrarFranjasPorDocente(franjasDisponiblesParaCurso(curso, ctx.franjas, "teoria"), docenteId)[0]?.id ?? null);
-          if (franjaId) {
-            teoriaGens.push({
-              cursoId: curso.id, seccion, docenteId,
-              salonId: curso.sinSalon ? null : teoriaSalonId,
-              franjaId, tipoSesion: "teoria",
-            });
-          }
+            : (filtrarFranjasPorDocente(franjasTeoriaEmergencia, docenteId)[0]?.id ?? null);
+          // Fallback de emergencia: garantizar que el gen siempre se crea
+          franjaId ??= franjasTeoriaFallback;
+          if (!franjaId) continue; // solo si ctx.franjas está vacío (nunca en prod)
+          teoriaGens.push({
+            cursoId: curso.id, seccion, docenteId,
+            salonId: curso.sinSalon ? null : teoriaSalonId,
+            franjaId, tipoSesion: "teoria",
+          });
         }
       }
 
-      // ── Gen de laboratorio: siempre 1 gen con franjasExtra ──
+      // ── Genes de laboratorio: un gen independiente por período ──
       const labGens: Gen[] = [];
       if (curso.tieneLabatorio) {
-        const genLab = elegirGenLab(curso, docenteId, seccion);
-        if (genLab) labGens.push(genLab);
+        labGens.push(...elegirGenLab(curso, docenteId, seccion));
       }
 
       // ── Sync docente: si uno tiene docente y el otro no, propagar ──

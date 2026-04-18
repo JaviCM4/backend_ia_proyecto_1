@@ -13,7 +13,6 @@
 
 import type { Cromosoma, Gen, ContextoGA } from "../types/Genetic.types";
 import type { Salon, FranjaHoraria } from "../../algoritmoGenetico/types/Domain.types";
-import { obtenerFranjasContiguas } from "../../algoritmoGenetico/utils/timeUtil";
 
 // ─────────────────────────────────────────────────────────────
 // HELPERS
@@ -73,7 +72,6 @@ function regenerarGen(gen: Gen, ctx: ContextoGA): Gen {
 
   // Franja ──────────────────────────────────────────────────
   let franjaId: string = gen.franjaId;
-  let franjasExtra: string[] | undefined = gen.franjasExtra;
 
   if (!curso.franjaFija) {
     let disponibles: FranjaHoraria[] = ctx.franjas.filter((f) => {
@@ -92,85 +90,14 @@ function regenerarGen(gen: Gen, ctx: ContextoGA): Gen {
       }
     }
 
+    // Cada gen (incluidos labs) tiene una sola franja asignada.
+    // Los períodos de lab son genes separados — no se necesita franjasExtra.
     if (disponibles.length > 0) {
-      if (gen.tipoSesion === "laboratorio") {
-        const noPeriodosLab = curso.noPeriodosLab ?? 2;
-        const candidatos = disponibles.slice().sort(() => Math.random() - 0.5);
-
-        // ── 1 período ──────────────────────────────────────────
-        if (noPeriodosLab <= 1) {
-          franjaId = elegirAleatorio(disponibles).id;
-          franjasExtra = undefined;
-
-        // ── 2 períodos ─────────────────────────────────────────
-        } else if (noPeriodosLab === 2) {
-          let asignado = false;
-          // Intentar 2 contiguos mismo día
-          for (const f of candidatos) {
-            const cn = obtenerFranjasContiguas(f.id, 2, ctx.franjas);
-            if (cn && cn.length >= 2) {
-              franjaId = cn[0].id; franjasExtra = [cn[1].id]; asignado = true; break;
-            }
-          }
-          if (!asignado) {
-            // Split 1M + 1J
-            const fM = candidatos.find(f => f.dia === "martes");
-            const fJ = candidatos.find(f => f.dia === "jueves");
-            if (fM && fJ) { franjaId = fM.id; franjasExtra = [fJ.id]; }
-            else { franjaId = candidatos[0]?.id ?? elegirAleatorio(disponibles).id; franjasExtra = undefined; }
-          }
-
-        // ── 3 períodos ─────────────────────────────────────────
-        } else if (noPeriodosLab === 3) {
-          let asignado = false;
-          // Intento A: 3 juntos mismo día → gana el bonus +5
-          for (const f of candidatos) {
-            const cn = obtenerFranjasContiguas(f.id, 3, ctx.franjas);
-            if (cn && cn.length >= 3) {
-              franjaId = cn[0].id; franjasExtra = [cn[1].id, cn[2].id]; asignado = true; break;
-            }
-          }
-          // Intento B: 2+1 split entre M y J
-          if (!asignado) {
-            for (const f of candidatos) {
-              const cn = obtenerFranjasContiguas(f.id, 2, ctx.franjas);
-              if (cn && cn.length >= 2) {
-                const diaOtro = (cn[0].dia === "martes") ? "jueves" : "martes";
-                const fOtro = candidatos.find(f2 => f2.dia === diaOtro);
-                if (fOtro) {
-                  franjaId = cn[0].id; franjasExtra = [cn[1].id, fOtro.id]; asignado = true; break;
-                }
-              }
-            }
-          }
-          // Intento C: 3 franjas aleatorias
-          if (!asignado) {
-            const sh = candidatos.slice();
-            franjaId = sh[0]?.id ?? elegirAleatorio(disponibles).id;
-            franjasExtra = sh.length >= 3 ? [sh[1].id, sh[2].id]
-                         : sh.length >= 2 ? [sh[1].id]
-                         : undefined;
-          }
-
-        // ── > 3 períodos ───────────────────────────────────────
-        } else {
-          let asignado = false;
-          for (const f of candidatos) {
-            const cn = obtenerFranjasContiguas(f.id, noPeriodosLab, ctx.franjas);
-            if (cn && cn.length >= noPeriodosLab) {
-              franjaId = cn[0].id; franjasExtra = cn.slice(1, noPeriodosLab).map(x => x.id); asignado = true; break;
-            }
-          }
-          if (!asignado) { franjaId = elegirAleatorio(disponibles).id; franjasExtra = undefined; }
-        }
-      } else {
-        franjaId = elegirAleatorio(disponibles).id;
-        franjasExtra = undefined;
-      }
+      franjaId = elegirAleatorio(disponibles).id;
     }
   }
 
-  return { ...gen, docenteId, salonId, franjaId, franjasExtra };
+  return { ...gen, docenteId, salonId, franjaId, franjasExtra: undefined };
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -219,17 +146,14 @@ export function mutacionIntercambio(cromosoma: Cromosoma): Cromosoma {
   const tmpDocente = genes[i].docenteId;
   const tmpSalon = genes[i].salonId;
   const tmpFranja = genes[i].franjaId;
-  const tmpFranjasExtra = genes[i].franjasExtra;
 
   genes[i].docenteId = genes[j].docenteId;
   genes[i].salonId = genes[j].salonId;
   genes[i].franjaId = genes[j].franjaId;
-  genes[i].franjasExtra = genes[j].franjasExtra;
 
   genes[j].docenteId = tmpDocente;
   genes[j].salonId = tmpSalon;
   genes[j].franjaId = tmpFranja;
-  genes[j].franjasExtra = tmpFranjasExtra;
 
   // Propagar docente a todos los gens de las secciones afectadas
   sincronizarSecciones(genes);

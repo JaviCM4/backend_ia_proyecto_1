@@ -68,9 +68,9 @@ const importFromCSV = async (content: string): Promise<ImportAsignacionResult> =
     }
 
     try {
-      const curso = await Curso.findByPk(cursoId);
+      const curso = await Curso.findOne({ where: { codigo: String(cursoId) } });
       if (!curso) {
-        errores.push(`Curso con id=${cursoId} no existe`);
+        errores.push(`Curso con codigo=${cursoId} no existe`);
         continue;
       }
 
@@ -81,13 +81,13 @@ const importFromCSV = async (content: string): Promise<ImportAsignacionResult> =
       }
 
       const existing = await AsignacionDocente.findOne({
-        where: { curso_id: cursoId, docente_id: docenteId },
+        where: { curso_id: curso.id, docente_id: docenteId },
       });
 
       if (existing) {
         duplicadas++;
       } else {
-        await AsignacionDocente.create({ curso_id: cursoId, docente_id: docenteId });
+        await AsignacionDocente.create({ curso_id: curso.id, docente_id: docenteId });
         creadas++;
       }
     } catch (e) {

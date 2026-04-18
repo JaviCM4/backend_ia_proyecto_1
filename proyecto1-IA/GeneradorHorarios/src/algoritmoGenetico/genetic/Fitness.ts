@@ -20,32 +20,41 @@ import { horaAMinutos } from "../../algoritmoGenetico/utils/timeUtil";
 
 const PESOS = {
   // Restricciones DURAS (penalización alta — deben evitarse siempre)
-  docente_doble: 100,
-  salon_doble: 100,
-  semestre_traslape: 80,
-  docente_fuera_horario: 60,
-  salon_jornada: 50,
-  curso_jornada: 50,
+  docente_doble: 200,
+  salon_doble: 200,
+  semestre_traslape: 180,
+  docente_fuera_horario: 160,
+  salon_jornada: 150,
+  curso_jornada: 150,
 
   // Restricciones de asignación prefijada (penalización por incumplimiento)
-  asignacion_docente_incumplida: 80,
-  asignacion_salon_incumplida: 80,
-  asignacion_horario_incumplida: 80,
+  asignacion_docente_incumplida: 180,
+  asignacion_salon_incumplida: 180,
+  asignacion_horario_incumplida: 180,
+
+  // Nuevos conflictos estructurales
+  // NOTA: docente_no_asignado y salon_incorrecto tienen peso 0 aquí porque
+  // ya son penalizados por calcularScoreAsignaciones (asignacion_docente_incumplida
+  // / asignacion_salon_incumplida). Mantenerlos en validators sirve solo para
+  // contarlos y mostrarlos en la UI sin sumar doble penalización.
+  docente_no_asignado: 0,
+  salon_incorrecto: 0,
+  lab_periodos_no_contiguos: 140,  // períodos de lab dispersos o en día incorrecto
 
   // Premios (bonificaciones por soluciones de calidad)
-  cursos_consecutivos: 10,           // par de cursos del mismo semestre consecutivos
-  salon_capacidad_adecuada: 5,       // salón con capacidad ≥ estudiantes inscritos
+  cursos_consecutivos: 60,           // par de cursos del mismo semestre consecutivos
+  salon_capacidad_adecuada: 55,      // salón con capacidad ≥ estudiantes inscritos
 
   // Premios por cumplir asignaciones prefijadas
-  asignacion_docente_cumplida: 10,   // docente asignado correcto (por gen)
-  asignacion_salon_cumplida: 10,     // primera sección con salón correcto
-  asignacion_salon_extra: 5,         // secciones adicionales con salón correcto
-  asignacion_horario_cumplida: 10,   // primera sección con hora correcta
-  asignacion_horario_extra: 5,       // secciones adicionales con hora correcta
+  asignacion_docente_cumplida: 60,   // docente asignado correcto (por gen)
+  asignacion_salon_cumplida: 60,     // primera sección con salón correcto
+  asignacion_salon_extra: 55,        // secciones adicionales con salón correcto
+  asignacion_horario_cumplida: 60,   // primera sección con hora correcta
+  asignacion_horario_extra: 55,      // secciones adicionales con hora correcta
 
   // Premios por coherencia dentro del curso
-  mismo_docente_teoria_lab: 10,      // teoría y lab del mismo curso los da el mismo docente
-  lab_periodos_correctos: 5,         // todos los períodos del lab en un mismo día (sin split M/J)
+  mismo_docente_teoria_lab: 60,      // teoría y lab del mismo curso los da el mismo docente
+  lab_periodos_correctos: 55,        // todos los períodos del lab en un mismo día (sin split M/J)
 };
 /*
 const PESOS = {
@@ -60,7 +69,7 @@ const PESOS = {
 };
 */
 
-const BASE_SCORE = 10_000;
+const BASE_SCORE = 100_000;
 
 // ─────────────────────────────────────────────────────────────
 // PREMIOS
@@ -253,34 +262,33 @@ function calcularScoreAsignaciones(genes: Gen[], ctx: ContextoGA): number {
 function calcularPremioCoherenciaSeccion(genes: Gen[], ctx: ContextoGA): number {
   let premio = 0;
 
-  // Agrupar por cursoId|seccion
-  const porSeccion = new Map<string, { teoria?: Gen; lab?: Gen }>();
+  // Agrupar por cursoId|seccion — cada sección puede tener N genes de lab
+  const porSeccion = new Map<string, { teoria?: Gen; labs: Gen[] }>();
   for (const gen of genes) {
     const clave = `${gen.cursoId}|${gen.seccion}`;
     let entry = porSeccion.get(clave);
-    if (!entry) { entry = {}; porSeccion.set(clave, entry); }
+    if (!entry) { entry = { labs: [] }; porSeccion.set(clave, entry); }
     if (gen.tipoSesion === 'teoria') entry.teoria = gen;
-    else entry.lab = gen;
+    else entry.labs.push(gen);
   }
 
-  for (const { teoria, lab } of porSeccion.values()) {
+  for (const { teoria, labs } of porSeccion.values()) {
+    const labRef = labs[0];
     // +10 mismo docente en teoría y lab
     if (
-      teoria && lab &&
-      teoria.docenteId != null && lab.docenteId != null &&
-      teoria.docenteId === lab.docenteId
+      teoria && labRef &&
+      teoria.docenteId != null && labRef.docenteId != null &&
+      teoria.docenteId === labRef.docenteId
     ) {
       premio += PESOS.mismo_docente_teoria_lab;
     }
 
-    // +5 lab tiene todos los períodos juntos en el mismo día (sin split M/J)
-    if (lab) {
-      const curso = ctx.indiceCursos.get(lab.cursoId);
+    // +5 todos los períodos del lab en el mismo día (sin split M/J)
+    if (labs.length > 0) {
+      const curso = ctx.indiceCursos.get(labs[0].cursoId);
       const expectedPeriods = curso?.noPeriodosLab ?? 2;
-      const todasFranjas = [lab.franjaId, ...(lab.franjasExtra ?? [])];
-      const actualPeriods = todasFranjas.length;
-      if (actualPeriods === expectedPeriods) {
-        const dias = new Set(todasFranjas.map(fid => ctx.indiceFranjas.get(fid)?.dia));
+      if (labs.length === expectedPeriods) {
+        const dias = new Set(labs.map(g => ctx.indiceFranjas.get(g.franjaId)?.dia));
         if (dias.size === 1) {
           premio += PESOS.lab_periodos_correctos;
         }
